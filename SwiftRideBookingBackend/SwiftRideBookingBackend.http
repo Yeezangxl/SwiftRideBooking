@@ -1,0 +1,6 @@
+@SwiftRideBookingBackend_HostAddress = http://localhost:5258
+
+GET {{SwiftRideBookingBackend_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36203.30 d17.14
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SwiftRideBookingBackend", "SwiftRideBookingBackend\SwiftRideBookingBackend.csproj", "{4AB9E89D-D784-4B7C-9E33-31F988151B03}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SwiftRideBookingBackend.Tests", "SwiftRideBookingBackend.Tests\SwiftRideBookingBackend.Tests.csproj", "{6E0BA1E2-5893-4F35-8895-B7322403D632}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{4AB9E89D-D784-4B7C-9E33-31F988151B03}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4AB9E89D-D784-4B7C-9E33-31F988151B03}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4AB9E89D-D784-4B7C-9E33-31F988151B03}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4AB9E89D-D784-4B7C-9E33-31F988151B03}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6E0BA1E2-5893-4F35-8895-B7322403D632}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6E0BA1E2-5893-4F35-8895-B7322403D632}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6E0BA1E2-5893-4F35-8895-B7322403D632}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6E0BA1E2-5893-4F35-8895-B7322403D632}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {478D5BE6-F82F-4BA6-A74E-9C53C20DD1F6}
+	EndGlobalSection
+EndGlobal
