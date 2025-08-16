@@ -1,267 +1,264 @@
-using AutoMapper;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using SwiftRideBookingBackend.DTO;
-using SwiftRideBookingBackend.Interface;
-using SwiftRideBookingBackend.Models;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
+// src/pages/AdminUsers.jsx
+import React, { useEffect, useState } from "react";
+import axios from "axios";
 
-namespace SwiftRideBookingBackend.Controllers
-{
-    [ApiController]
-    [Route("api/[controller]")]
-    public class BookingController : ControllerBase
-    {
-        private readonly IBookingRepository _bookingRepo;
-        private readonly BookingContext _context;
-        private readonly IMapper _mapper;
+const API = "https://localhost:7199";
 
-        public BookingController(IBookingRepository bookingRepo, BookingContext context, IMapper mapper)
-        {
-            _bookingRepo = bookingRepo;
-            _context = context;
-            _mapper = mapper;
-        }
+// Try these in order until one succeeds (2xx) for generic registration
+const REGISTER_ENDPOINTS = [
+  "/api/User/register",
+  "/api/Users/register",
+  "/api/Account/register",
+  "/api/Authentication/register",
+  "/api/Auth/Register",
+];
 
-        // POST: api/Booking
-        [HttpPost]
-        public async Task<IActionResult> BookTicket([FromBody] BookingDto bookingDto)
-        {
-            if (bookingDto == null || bookingDto.UserId <= 0 || bookingDto.BusId <= 0 || bookingDto.JourneyDate == default)
-                return BadRequest("Invalid booking data!");
+export default function AdminUsers() {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [deletingId, setDeletingId] = useState(null);
 
-            var bus = await _context.Buses.FindAsync(bookingDto.BusId);
-            if (bus == null)
-                return BadRequest("Bus not found!");
+  // form state
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState("User");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
 
-            var booking = new Booking
-            {
-                UserId = bookingDto.UserId,
-                BusId = bookingDto.BusId,
-                JourneyDate = bookingDto.JourneyDate,
-                BookingDate = DateTime.UtcNow,
-                SeatNumbers = bookingDto.SeatNumbers ?? "A1",
-                Status = "Booked",
-                BoardingPointId = bookingDto.BoardingPointId,
-                DroppingPointId = bookingDto.DroppingPointId
-            };
+  // promotion in-progress flag (per row)
+  const [promotingId, setPromotingId] = useState(null);
 
-            await _bookingRepo.AddBookingAsync(booking);
-            await _bookingRepo.SaveAsync();
+  const auth = () => {
+    const token = localStorage.getItem("token");
+    return token ? { headers: { Authorization: `Bearer ${token}` } } : {};
+  };
 
-            return Ok(new { Message = "Booking Successful!", BookingId = booking.BookingId, Status = booking.Status });
-        }
+  const errText = (e) =>
+    e?.response?.data
+      ? (typeof e.response.data === "string"
+          ? e.response.data
+          : JSON.stringify(e.response.data))
+      : (e?.message || "Something went wrong");
 
-        // === SOFT-CANCEL (keeps row; admin can still see it) ===
-        // POST: api/Booking/{id}/cancel
-        [HttpPost("{id}/cancel")]
-        public async Task<IActionResult> CancelBooking(int id)
-        {
-            var booking = await _context.Bookings.FirstOrDefaultAsync(b => b.BookingId == id);
-            if (booking == null) return NotFound();
-
-            if (!string.Equals(booking.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
-            {
-                booking.Status = "Cancelled";
-                await _bookingRepo.SaveAsync();
-            }
-
-            return Ok(new { Message = "Booking cancelled.", BookingId = booking.BookingId, Status = booking.Status });
-        }
-
-        // GET: api/Booking/user/{userId}
-        // Return anonymous objects that include Status (no need to modify BookingDto)
-        [HttpGet("user/{userId}")]
-        public async Task<IActionResult> GetBookingsByUser(int userId)
-        {
-            var bookings = await _context.Bookings
-                .Where(b => b.UserId == userId)
-                .Include(b => b.Bus)!.ThenInclude(bus => bus.Route)
-                .ToListAsync();
-
-            var result = bookings.Select(b => new
-            {
-                b.BookingId,
-                b.UserId,
-                b.BusId,
-                b.JourneyDate,
-                b.SeatNumbers,
-                b.BoardingPointId,
-                b.DroppingPointId,
-                Status = b.Status,
-                Bus = b.Bus == null ? null : new
-                {
-                    b.Bus.BusId,
-                    b.Bus.BusNumber,
-                    b.Bus.BusType,
-                    b.Bus.RouteId,
-                    b.Bus.DepartureTime,
-                    b.Bus.TotalSeats,
-                    Route = b.Bus.Route == null ? null : new
-                    {
-                        b.Bus.Route.RouteId,
-                        b.Bus.Route.Origin,
-                        b.Bus.Route.Destination
-                    }
-                }
-            });
-
-            return Ok(result);
-        }
-
-        // GET: api/Booking/{id}
-        [HttpGet("{id}")]
-        public async Task<IActionResult> GetBookingById(int id)
-        {
-            var b = await _context.Bookings
-                .Include(x => x.Bus)!.ThenInclude(bus => bus.Route)
-                .FirstOrDefaultAsync(x => x.BookingId == id);
-
-            if (b == null) return NotFound();
-
-            var result = new
-            {
-                b.BookingId,
-                b.UserId,
-                b.BusId,
-                b.JourneyDate,
-                b.SeatNumbers,
-                b.BoardingPointId,
-                b.DroppingPointId,
-                Status = b.Status,
-                Bus = b.Bus == null ? null : new
-                {
-                    b.Bus.BusId,
-                    b.Bus.BusNumber,
-                    b.Bus.BusType,
-                    b.Bus.RouteId,
-                    b.Bus.DepartureTime,
-                    b.Bus.TotalSeats,
-                    Route = b.Bus.Route == null ? null : new
-                    {
-                        b.Bus.Route.RouteId,
-                        b.Bus.Route.Origin,
-                        b.Bus.Route.Destination
-                    }
-                }
-            };
-
-            return Ok(result);
-        }
-
-        // PUT: api/Booking/{id}  (no Status here because BookingDto doesn’t have it)
-        [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateBooking(int id, [FromBody] BookingDto bookingDto)
-        {
-            var booking = await _bookingRepo.GetBookingByIdAsync(id);
-            if (booking == null)
-                return NotFound();
-
-            booking.BusId = bookingDto.BusId;
-            booking.UserId = bookingDto.UserId;
-            booking.JourneyDate = bookingDto.JourneyDate;
-            booking.SeatNumbers = bookingDto.SeatNumbers ?? booking.SeatNumbers;
-            booking.BoardingPointId = bookingDto.BoardingPointId;
-            booking.DroppingPointId = bookingDto.DroppingPointId;
-
-            await _bookingRepo.SaveAsync();
-            return Ok(_mapper.Map<BookingDto>(booking));
-        }
-
-        // DELETE: api/Booking/{id}  (hard delete; keep for admin if you want)
-        [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteBooking(int id)
-        {
-            var booking = await _bookingRepo.GetBookingByIdAsync(id);
-            if (booking == null)
-                return NotFound();
-
-            _context.Bookings.Remove(booking);
-            await _bookingRepo.SaveAsync();
-            return Ok(new { Message = "Booking deleted successfully." });
-        }
-
-        // POST: api/Booking/search
-        [HttpPost("search")]
-        public async Task<IActionResult> SearchBuses([FromBody] SearchBusDto search)
-        {
-            if (search == null || string.IsNullOrWhiteSpace(search.From) || string.IsNullOrWhiteSpace(search.To) || search.Date == default)
-                return BadRequest("Invalid search data!");
-
-            var route = await _context.Routes
-                .FirstOrDefaultAsync(r => r.Origin == search.From && r.Destination == search.To);
-
-            if (route == null)
-                return NotFound("No such route!");
-
-            var dateOnly = search.Date.Date;
-            var buses = await _context.Buses
-                .Where(b => b.RouteId == route.RouteId && b.DepartureTime.Date == dateOnly)
-                .ToListAsync();
-
-            return Ok(_mapper.Map<IEnumerable<BusDto>>(buses));
-        }
-
-        // GET: api/Booking  (admin list; includes Status)
-        [HttpGet]
-        public async Task<IActionResult> GetAll()
-        {
-            var bookings = await _context.Bookings
-                .Include(b => b.Bus)!.ThenInclude(bus => bus.Route)
-                .ToListAsync();
-
-            var result = bookings.Select(b => new
-            {
-                b.BookingId,
-                b.UserId,
-                b.BusId,
-                b.JourneyDate,
-                b.SeatNumbers,
-                b.BoardingPointId,
-                b.DroppingPointId,
-                Status = b.Status,
-                Bus = b.Bus == null ? null : new
-                {
-                    b.Bus.BusId,
-                    b.Bus.BusNumber,
-                    b.Bus.BusType,
-                    b.Bus.RouteId,
-                    b.Bus.DepartureTime,
-                    b.Bus.TotalSeats,
-                    b.Bus.BusOperatorId,
-                    Route = b.Bus.Route == null ? null : new
-                    {
-                        b.Bus.Route.RouteId,
-                        b.Bus.Route.Origin,
-                        b.Bus.Route.Destination
-                    }
-                }
-            });
-
-            return Ok(result);
-        }
-
-        // GET: api/Booking/bookedseats?busId=XX&date=YYYY-MM-DD
-        [HttpGet("bookedseats")]
-        public async Task<IActionResult> GetBookedSeats(int busId, DateTime date)
-        {
-            // FIX: use b.Status (capital S)
-            var bookedSeats = await _context.Bookings
-                .Where(b => b.BusId == busId
-                         && b.JourneyDate.Date == date.Date
-                         && b.Status == "Booked")
-                .Select(b => b.SeatNumbers)
-                .ToListAsync();
-
-            var seatList = bookedSeats
-                .SelectMany(s => s.Split(',', StringSplitOptions.RemoveEmptyEntries))
-                .Distinct()
-                .ToList();
-
-            return Ok(seatList);
-        }
+  async function loadUsers() {
+    try {
+      setLoading(true);
+      setErr("");
+      const res = await axios.get(`${API}/api/Users`, auth());
+      setUsers(res.data || []);
+    } catch (e) {
+      setErr(errText(e));
+    } finally {
+      setLoading(false);
     }
+  }
+
+  useEffect(() => {
+    (async () => { await loadUsers(); })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function deleteUser(id) {
+    if (!window.confirm("Delete user?")) return;
+    try {
+      setDeletingId(id);
+      await axios.delete(`${API}/api/Users/${id}`, auth());
+      setUsers(prev => prev.filter(u => u.userId !== id));
+    } catch (e) {
+      alert(errText(e));
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  // Helper: generic register through any known endpoint
+  async function registerViaFallbacks(body) {
+    try {
+      await axios.post(`${API}/api/Users`, body, auth());
+      return true;
+    } catch (firstErr) {
+      let lastErr = firstErr;
+      for (const ep of REGISTER_ENDPOINTS) {
+        try {
+          await axios.post(`${API}${ep}`, body, auth());
+          return true;
+        } catch (e2) {
+          lastErr = e2;
+        }
+      }
+      throw new Error(
+        "Could not find a working register endpoint.\n" +
+        "Tried: POST /api/Users and " + REGISTER_ENDPOINTS.join(", ")
+      );
+    }
+  }
+
+  // === ADD USER / OPERATOR ===
+  async function addUser(e) {
+    e.preventDefault();
+    setSaving(true);
+    setMsg("");
+    const body = { name, email, password, role };
+
+    try {
+      if (role === "BusOperator") {
+        // Backend creates User(Role=BusOperator) + BusOperator linked to it
+        await axios.post(`${API}/api/BusOperator`, { name, email, password }, auth());
+        setMsg("✅ Created Bus Operator");
+      } else {
+        // Regular user (or Admin). Use existing register flow.
+        await registerViaFallbacks(body);
+        setMsg(`✅ Created ${role}`);
+      }
+
+      // reset form + refresh table
+      setName(""); setEmail(""); setPassword(""); setRole("User");
+      await loadUsers();
+
+      // auto-hide
+      setTimeout(() => setMsg(""), 2500);
+    } catch (e) {
+      alert(errText(e) || "Failed to create user.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // === PROMOTE EXISTING USER → BUS OPERATOR ===
+  const promoteToOperator = async (u) => {
+    if (!window.confirm(`Make ${u.email} a Bus Operator?`)) return;
+    try {
+      setPromotingId(u.userId);
+
+      // 1) Try without password (works if backend treats this as promotion)
+      await axios.post(`${API}/api/BusOperator`, {
+        name: u.name,
+        email: u.email,
+        userId: u.userId
+      }, auth());
+
+    } catch (e) {
+      // 2) If backend requires a Password, retry with a temp one
+      const data = e?.response?.data;
+      const passwordRequired =
+        (typeof data === "object" && data?.errors?.Password) ||
+        (typeof data === "string" && /password/i.test(data));
+
+      if (passwordRequired) {
+        await axios.post(`${API}/api/BusOperator`, {
+          name: u.name,
+          email: u.email,
+          userId: u.userId,
+          password: "Temp#12345"
+        }, auth());
+      } else {
+        console.error("Promote error:", e);
+        alert(errText(e) || "Promotion failed");
+        setPromotingId(null);
+        return;
+      }
+    }
+
+    setPromotingId(null);
+    await loadUsers();
+    setMsg("✅ Promoted to Bus Operator");
+    setTimeout(() => setMsg(""), 2500);
+  };
+
+  return (
+    <div style={{ padding: 40 }}>
+      <h2 style={{ color: "#8e24aa", textAlign: "center" }}>Manage Users</h2>
+
+      {/* Add User */}
+      <form onSubmit={addUser} style={formRow}>
+        <input
+          style={input}
+          placeholder="Name"
+          value={name}
+          onChange={e=>setName(e.target.value)}
+          required
+        />
+        <input
+          style={input}
+          placeholder="Email"
+          type="email"
+          value={email}
+          onChange={e=>setEmail(e.target.value)}
+          required
+        />
+        <input
+          style={input}
+          placeholder="Password"
+          type="password"
+          value={password}
+          onChange={e=>setPassword(e.target.value)}
+          required
+        />
+        <select
+          style={input}
+          value={role}
+          onChange={e=>setRole(e.target.value)}
+        >
+          <option value="User">User</option>
+          <option value="BusOperator">BusOperator</option>
+          <option value="Admin">Admin</option>
+        </select>
+        <button type="submit" disabled={saving} style={btn}>
+          {saving ? "Saving..." : "Add"}
+        </button>
+      </form>
+
+      {msg && <div style={{ color:"#239c4d", fontWeight:700, marginBottom:12 }}>{msg}</div>}
+
+      {loading ? (
+        <p>Loading...</p>
+      ) : err ? (
+        <p style={{color:'crimson'}}>{String(err)}</p>
+      ) : (
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr>
+              <th style={th}>UserId</th>
+              <th style={th}>Name</th>
+              <th style={th}>Email</th>
+              <th style={th}>Role</th>
+              <th style={th}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {users.map(u => (
+              <tr key={u.userId}>
+                <td style={td}>{u.userId}</td>
+                <td style={td}>{u.name}</td>
+                <td style={td}>{u.email}</td>
+                <td style={td}>{u.role}</td>
+                <td style={{...td, textAlign:"right"}}>
+                  {u.role !== "BusOperator" && (
+                    <button
+                      style={{ marginRight: 8, opacity: promotingId===u.userId ? .6 : 1 }}
+                      disabled={promotingId===u.userId}
+                      onClick={() => promoteToOperator(u)}
+                    >
+                      {promotingId===u.userId ? "Promoting..." : "Promote to Operator"}
+                    </button>
+                  )}
+                  <button onClick={() => deleteUser(u.userId)} disabled={deletingId===u.userId}>
+                    {deletingId===u.userId ? "Deleting..." : "Delete"}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
 }
+
+const th = { borderBottom: "1px solid #eee", padding: 12, textAlign: "left" };
+const td = { borderBottom: "1px solid #f4f4f4", padding: 12 };
+const formRow = { display:"grid", gridTemplateColumns:"1.1fr 1.2fr 1fr 0.9fr auto", gap:10, margin:"14px 0 22px" };
+const input = { padding:"10px 12px", border:"1px solid #e9e9ef", borderRadius:10, outline:"none" };
+const btn = { padding:"10px 14px", borderRadius:10, border:"1px solid #e9e9ef", background:"#f7c7e3", fontWeight:600 };
