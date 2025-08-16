@@ -1,97 +1,267 @@
-SET NOCOUNT ON;
-BEGIN TRAN;
+using AutoMapper;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using SwiftRideBookingBackend.DTO;
+using SwiftRideBookingBackend.Interface;
+using SwiftRideBookingBackend.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 
-------------------------------------------------------------
--- 0) Ensure "Operator" role exists and your user has it
---    (ASP.NET Identity default tables)
-------------------------------------------------------------
-DECLARE @RoleName sysname = N'Operator';
-DECLARE @UserEmail nvarchar(256) = N'youremail@domain.com'; -- <-- change
-DECLARE @RoleId nvarchar(450);
-DECLARE @UserId nvarchar(450);
+namespace SwiftRideBookingBackend.Controllers
+{
+    [ApiController]
+    [Route("api/[controller]")]
+    public class BookingController : ControllerBase
+    {
+        private readonly IBookingRepository _bookingRepo;
+        private readonly BookingContext _context;
+        private readonly IMapper _mapper;
 
--- Create role if missing
-IF NOT EXISTS (SELECT 1 FROM dbo.AspNetRoles WHERE [Name] = @RoleName)
-BEGIN
-    SET @RoleId = CONVERT(nvarchar(450), NEWID());
-    INSERT dbo.AspNetRoles (Id, [Name], NormalizedName, ConcurrencyStamp)
-    VALUES (@RoleId, @RoleName, UPPER(@RoleName), NEWID());
-END
-ELSE
-    SELECT @RoleId = Id FROM dbo.AspNetRoles WHERE [Name] = @RoleName;
+        public BookingController(IBookingRepository bookingRepo, BookingContext context, IMapper mapper)
+        {
+            _bookingRepo = bookingRepo;
+            _context = context;
+            _mapper = mapper;
+        }
 
--- Find user by email (or change this to search by UserName)
-SELECT @UserId = Id FROM dbo.AspNetUsers WHERE Email = @UserEmail;
+        // POST: api/Booking
+        [HttpPost]
+        public async Task<IActionResult> BookTicket([FromBody] BookingDto bookingDto)
+        {
+            if (bookingDto == null || bookingDto.UserId <= 0 || bookingDto.BusId <= 0 || bookingDto.JourneyDate == default)
+                return BadRequest("Invalid booking data!");
 
--- (Optional) if you don’t know the email, inspect users:
--- SELECT TOP 50 Id, UserName, Email FROM dbo.AspNetUsers ORDER BY Created DESC;
+            var bus = await _context.Buses.FindAsync(bookingDto.BusId);
+            if (bus == null)
+                return BadRequest("Bus not found!");
 
--- Attach role to user if missing
-IF @UserId IS NOT NULL
-AND NOT EXISTS (SELECT 1 FROM dbo.AspNetUserRoles WHERE UserId=@UserId AND RoleId=@RoleId)
-BEGIN
-    INSERT dbo.AspNetUserRoles(UserId, RoleId) VALUES (@UserId, @RoleId);
-END
+            var booking = new Booking
+            {
+                UserId = bookingDto.UserId,
+                BusId = bookingDto.BusId,
+                JourneyDate = bookingDto.JourneyDate,
+                BookingDate = DateTime.UtcNow,
+                SeatNumbers = bookingDto.SeatNumbers ?? "A1",
+                Status = "Booked",
+                BoardingPointId = bookingDto.BoardingPointId,
+                DroppingPointId = bookingDto.DroppingPointId
+            };
 
-------------------------------------------------------------
--- 1) Ensure BusOperators table exists (Id, UserId)
-------------------------------------------------------------
-IF OBJECT_ID('dbo.BusOperators','U') IS NULL
-BEGIN
-    CREATE TABLE dbo.BusOperators
-    (
-        Id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
-        UserId nvarchar(450) NOT NULL UNIQUE
-            CONSTRAINT FK_BusOperators_AspNetUsers
-            FOREIGN KEY REFERENCES dbo.AspNetUsers(Id)
-    );
-END
+            await _bookingRepo.AddBookingAsync(booking);
+            await _bookingRepo.SaveAsync();
 
--- Create a BusOperator row for this user if missing
-IF @UserId IS NOT NULL
-AND NOT EXISTS (SELECT 1 FROM dbo.BusOperators WHERE UserId=@UserId)
-BEGIN
-    INSERT dbo.BusOperators(UserId) VALUES (@UserId);
-END
+            return Ok(new { Message = "Booking Successful!", BookingId = booking.BookingId, Status = booking.Status });
+        }
 
-DECLARE @ThisOperatorId INT;
-SELECT @ThisOperatorId = Id FROM dbo.BusOperators WHERE UserId=@UserId;
+        // === SOFT-CANCEL (keeps row; admin can still see it) ===
+        // POST: api/Booking/{id}/cancel
+        [HttpPost("{id}/cancel")]
+        public async Task<IActionResult> CancelBooking(int id)
+        {
+            var booking = await _context.Bookings.FirstOrDefaultAsync(b => b.BookingId == id);
+            if (booking == null) return NotFound();
 
-------------------------------------------------------------
--- 2) Ensure Buses.BusOperatorId column + FK exist
-------------------------------------------------------------
-IF COL_LENGTH('dbo.Buses','BusOperatorId') IS NULL
-BEGIN
-    -- Add column nullable first to avoid default 0
-    ALTER TABLE dbo.Buses ADD BusOperatorId INT NULL;
-END
+            if (!string.Equals(booking.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
+            {
+                booking.Status = "Cancelled";
+                await _bookingRepo.SaveAsync();
+            }
 
--- Backfill existing rows that are NULL (choose a valid operator)
-IF EXISTS (SELECT 1 FROM dbo.Buses WHERE BusOperatorId IS NULL)
-BEGIN
-    -- Prefer this operator if available, otherwise pick any existing
-    IF @ThisOperatorId IS NOT NULL
-        UPDATE dbo.Buses SET BusOperatorId = @ThisOperatorId WHERE BusOperatorId IS NULL;
-    ELSE
-        UPDATE b SET BusOperatorId = o.Id
-        FROM dbo.Buses b
-        CROSS APPLY (SELECT TOP 1 Id FROM dbo.BusOperators ORDER BY Id) o
-        WHERE b.BusOperatorId IS NULL;
-END
+            return Ok(new { Message = "Booking cancelled.", BookingId = booking.BookingId, Status = booking.Status });
+        }
 
--- Make NOT NULL
-IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('dbo.Buses') 
-           AND name='BusOperatorId' AND is_nullable=1)
-BEGIN
-    ALTER TABLE dbo.Buses ALTER COLUMN BusOperatorId INT NOT NULL;
-END
+        // GET: api/Booking/user/{userId}
+        // Return anonymous objects that include Status (no need to modify BookingDto)
+        [HttpGet("user/{userId}")]
+        public async Task<IActionResult> GetBookingsByUser(int userId)
+        {
+            var bookings = await _context.Bookings
+                .Where(b => b.UserId == userId)
+                .Include(b => b.Bus)!.ThenInclude(bus => bus.Route)
+                .ToListAsync();
 
--- Add FK if missing
-IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name='FK_Buses_BusOperators_BusOperatorId')
-BEGIN
-    ALTER TABLE dbo.Buses WITH CHECK
-    ADD CONSTRAINT FK_Buses_BusOperators_BusOperatorId
-    FOREIGN KEY (BusOperatorId) REFERENCES dbo.BusOperators(Id);
-END
+            var result = bookings.Select(b => new
+            {
+                b.BookingId,
+                b.UserId,
+                b.BusId,
+                b.JourneyDate,
+                b.SeatNumbers,
+                b.BoardingPointId,
+                b.DroppingPointId,
+                Status = b.Status,
+                Bus = b.Bus == null ? null : new
+                {
+                    b.Bus.BusId,
+                    b.Bus.BusNumber,
+                    b.Bus.BusType,
+                    b.Bus.RouteId,
+                    b.Bus.DepartureTime,
+                    b.Bus.TotalSeats,
+                    Route = b.Bus.Route == null ? null : new
+                    {
+                        b.Bus.Route.RouteId,
+                        b.Bus.Route.Origin,
+                        b.Bus.Route.Destination
+                    }
+                }
+            });
 
-COMMIT TRAN;￼Enter
+            return Ok(result);
+        }
+
+        // GET: api/Booking/{id}
+        [HttpGet("{id}")]
+        public async Task<IActionResult> GetBookingById(int id)
+        {
+            var b = await _context.Bookings
+                .Include(x => x.Bus)!.ThenInclude(bus => bus.Route)
+                .FirstOrDefaultAsync(x => x.BookingId == id);
+
+            if (b == null) return NotFound();
+
+            var result = new
+            {
+                b.BookingId,
+                b.UserId,
+                b.BusId,
+                b.JourneyDate,
+                b.SeatNumbers,
+                b.BoardingPointId,
+                b.DroppingPointId,
+                Status = b.Status,
+                Bus = b.Bus == null ? null : new
+                {
+                    b.Bus.BusId,
+                    b.Bus.BusNumber,
+                    b.Bus.BusType,
+                    b.Bus.RouteId,
+                    b.Bus.DepartureTime,
+                    b.Bus.TotalSeats,
+                    Route = b.Bus.Route == null ? null : new
+                    {
+                        b.Bus.Route.RouteId,
+                        b.Bus.Route.Origin,
+                        b.Bus.Route.Destination
+                    }
+                }
+            };
+
+            return Ok(result);
+        }
+
+        // PUT: api/Booking/{id}  (no Status here because BookingDto doesn’t have it)
+        [HttpPut("{id}")]
+        public async Task<IActionResult> UpdateBooking(int id, [FromBody] BookingDto bookingDto)
+        {
+            var booking = await _bookingRepo.GetBookingByIdAsync(id);
+            if (booking == null)
+                return NotFound();
+
+            booking.BusId = bookingDto.BusId;
+            booking.UserId = bookingDto.UserId;
+            booking.JourneyDate = bookingDto.JourneyDate;
+            booking.SeatNumbers = bookingDto.SeatNumbers ?? booking.SeatNumbers;
+            booking.BoardingPointId = bookingDto.BoardingPointId;
+            booking.DroppingPointId = bookingDto.DroppingPointId;
+
+            await _bookingRepo.SaveAsync();
+            return Ok(_mapper.Map<BookingDto>(booking));
+        }
+
+        // DELETE: api/Booking/{id}  (hard delete; keep for admin if you want)
+        [HttpDelete("{id}")]
+        public async Task<IActionResult> DeleteBooking(int id)
+        {
+            var booking = await _bookingRepo.GetBookingByIdAsync(id);
+            if (booking == null)
+                return NotFound();
+
+            _context.Bookings.Remove(booking);
+            await _bookingRepo.SaveAsync();
+            return Ok(new { Message = "Booking deleted successfully." });
+        }
+
+        // POST: api/Booking/search
+        [HttpPost("search")]
+        public async Task<IActionResult> SearchBuses([FromBody] SearchBusDto search)
+        {
+            if (search == null || string.IsNullOrWhiteSpace(search.From) || string.IsNullOrWhiteSpace(search.To) || search.Date == default)
+                return BadRequest("Invalid search data!");
+
+            var route = await _context.Routes
+                .FirstOrDefaultAsync(r => r.Origin == search.From && r.Destination == search.To);
+
+            if (route == null)
+                return NotFound("No such route!");
+
+            var dateOnly = search.Date.Date;
+            var buses = await _context.Buses
+                .Where(b => b.RouteId == route.RouteId && b.DepartureTime.Date == dateOnly)
+                .ToListAsync();
+
+            return Ok(_mapper.Map<IEnumerable<BusDto>>(buses));
+        }
+
+        // GET: api/Booking  (admin list; includes Status)
+        [HttpGet]
+        public async Task<IActionResult> GetAll()
+        {
+            var bookings = await _context.Bookings
+                .Include(b => b.Bus)!.ThenInclude(bus => bus.Route)
+                .ToListAsync();
+
+            var result = bookings.Select(b => new
+            {
+                b.BookingId,
+                b.UserId,
+                b.BusId,
+                b.JourneyDate,
+                b.SeatNumbers,
+                b.BoardingPointId,
+                b.DroppingPointId,
+                Status = b.Status,
+                Bus = b.Bus == null ? null : new
+                {
+                    b.Bus.BusId,
+                    b.Bus.BusNumber,
+                    b.Bus.BusType,
+                    b.Bus.RouteId,
+                    b.Bus.DepartureTime,
+                    b.Bus.TotalSeats,
+                    b.Bus.BusOperatorId,
+                    Route = b.Bus.Route == null ? null : new
+                    {
+                        b.Bus.Route.RouteId,
+                        b.Bus.Route.Origin,
+                        b.Bus.Route.Destination
+                    }
+                }
+            });
+
+            return Ok(result);
+        }
+
+        // GET: api/Booking/bookedseats?busId=XX&date=YYYY-MM-DD
+        [HttpGet("bookedseats")]
+        public async Task<IActionResult> GetBookedSeats(int busId, DateTime date)
+        {
+            // FIX: use b.Status (capital S)
+            var bookedSeats = await _context.Bookings
+                .Where(b => b.BusId == busId
+                         && b.JourneyDate.Date == date.Date
+                         && b.Status == "Booked")
+                .Select(b => b.SeatNumbers)
+                .ToListAsync();
+
+            var seatList = bookedSeats
+                .SelectMany(s => s.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                .Distinct()
+                .ToList();
+
+            return Ok(seatList);
+        }
+    }
+}
